@@ -84,6 +84,7 @@ export class MapSyncService implements OnDestroy {
   private availableColors: string[];
   private clientColor: string;
   private modificationSecret: string;
+  private isImporting: boolean;
 
   constructor() {
     // Initialization of the behavior subjects.
@@ -101,6 +102,7 @@ export class MapSyncService implements OnDestroy {
       ];
     this.modificationSecret = '';
     this.colorMapping = {};
+    this.isImporting = false;
 
     const reconnectOptions = {
       reconnection: true,
@@ -367,13 +369,19 @@ export class MapSyncService implements OnDestroy {
     );
   }
 
-  public updateMap() {
+  public updateMap(callback?: () => void) {
     const cachedMapEntry: CachedMapEntry = this.getAttachedMap();
-    this.socket.emit('updateMap', {
-      mapId: cachedMapEntry.cachedMap.uuid,
-      map: cachedMapEntry.cachedMap,
-      modificationSecret: this.modificationSecret,
-    });
+    this.socket.emit(
+      'updateMap',
+      {
+        mapId: cachedMapEntry.cachedMap.uuid,
+        map: cachedMapEntry.cachedMap,
+        modificationSecret: this.modificationSecret,
+      },
+      () => {
+        if (callback) callback();
+      }
+    );
   }
 
   public updateMapOptions(options?: CachedMapOptions) {
@@ -1042,30 +1050,43 @@ export class MapSyncService implements OnDestroy {
 
   private createMapListeners() {
     // create is NOT called by the mmp lib for initial map load / and call, but for _imported_ maps
-    this.mmpService.on('create').subscribe(async (_result: MapCreateEvent) => {
+    this.mmpService.on('create').subscribe((_result: MapCreateEvent) => {
+      // Block node sync operations during import to prevent race conditions
+      this.isImporting = true;
       this.attachedNodeSubject.next(this.mmpService.selectNode());
 
-      await this.updateAttachedMap();
-      this.updateMap();
+      // Update local cache first, then sync entire map to server
+      this.updateAttachedMap();
+      // Use updateMap to replace all nodes on server with imported nodes
+      this.updateMap(() => {
+        // Re-enable node sync after server has processed the import
+        this.isImporting = false;
+      });
     });
 
     this.mmpService
       .on('nodeSelect')
       .subscribe((nodeProps: ExportNodeProperties) => {
-        this.updateNodeSelection(nodeProps.id, true);
+        if (!this.isImporting) {
+          this.updateNodeSelection(nodeProps.id, true);
+        }
         this.attachedNodeSubject.next(nodeProps);
       });
 
     this.mmpService
       .on('nodeDeselect')
       .subscribe((nodeProps: ExportNodeProperties) => {
-        this.updateNodeSelection(nodeProps.id, false);
+        if (!this.isImporting) {
+          this.updateNodeSelection(nodeProps.id, false);
+        }
         this.attachedNodeSubject.next(nodeProps);
       });
 
     this.mmpService.on('nodeUpdate').subscribe((result: NodeUpdateEvent) => {
       this.attachedNodeSubject.next(result.nodeProperties);
-      this.updateNode(result);
+      if (!this.isImporting) {
+        this.updateNode(result);
+      }
       this.updateAttachedMap();
     });
 

@@ -1042,10 +1042,10 @@ export class MapSyncService implements OnDestroy {
 
   private createMapListeners() {
     // create is NOT called by the mmp lib for initial map load / and call, but for _imported_ maps
-    this.mmpService.on('create').subscribe((_result: MapCreateEvent) => {
+    this.mmpService.on('create').subscribe(async (_result: MapCreateEvent) => {
       this.attachedNodeSubject.next(this.mmpService.selectNode());
 
-      this.updateAttachedMap();
+      await this.updateAttachedMap();
       this.updateMap();
     });
 
